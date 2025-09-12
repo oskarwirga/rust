@@ -24,6 +24,20 @@ use crate::llvm::{self, BasicBlock, ConstantInt, FALSE, Metadata, TRUE, ToLlvmBo
 use crate::type_::Type;
 use crate::value::Value;
 
+pub(crate) fn sign_fn_ptr_if_arm64e<'ll>(
+    cx: &CodegenCx<'ll, '_>,
+    llfn: &'ll llvm::Value,
+) -> &'ll llvm::Value {
+    if !cx.sess().target.llvm_target.starts_with("arm64e-apple-") {
+        return llfn;
+    }
+
+    unsafe {
+        let authed = llvm::LLVMRustConstPtrAuth(llfn as *const _ as *mut _, /*IA*/ 0, /*disc*/ 0);
+        &*authed
+    }
+}
+
 /*
 * A note on nomenclature of linking: "extern", "foreign", and "upcall".
 *

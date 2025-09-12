@@ -1945,3 +1945,21 @@ extern "C" void LLVMRustSetNoSanitizeHWAddress(LLVMValueRef Global) {
   MD.NoHWAddress = true;
   GV.setSanitizerMetadata(MD);
 }
+
+extern "C" LLVMValueRef LLVMRustConstPtrAuth(LLVMValueRef Ptr,
+                                             unsigned Key,
+                                             uint64_t Disc) {
+  auto *V = unwrap<Value>(Ptr);
+  auto *C = dyn_cast<Constant>(V);
+  if (!C) return Ptr;
+  auto *PTy = dyn_cast<PointerType>(C->getType());
+  if (!PTy) return Ptr;
+  if (isa<UndefValue>(C) || isa<ConstantPointerNull>(C)) return Ptr;
+
+  LLVMContext &Ctx = C->getContext();
+  auto *KeyC  = ConstantInt::get(Type::getInt32Ty(Ctx), Key);
+  auto *DiscC = ConstantInt::get(Type::getInt64Ty(Ctx), Disc);
+  auto *NullAD = ConstantPointerNull::get(PTy); // <— important
+
+  return wrap(ConstantPtrAuth::get(C, KeyC, DiscC, NullAD));
+}
