@@ -415,7 +415,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
 
         let args = self.check_call("invoke", llty, llfn, args);
         let funclet_bundle = funclet.map(|funclet| funclet.bundle());
-        let mut bundles: SmallVec<[_; 2]> = SmallVec::new();
+        let mut bundles: SmallVec<[_; 3]> = SmallVec::new();
         if let Some(funclet_bundle) = funclet_bundle {
             bundles.push(funclet_bundle);
         }
@@ -428,6 +428,16 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         if let Some(kcfi_bundle) = kcfi_bundle.as_ref().map(|b| b.as_ref()) {
             bundles.push(kcfi_bundle);
         }
+
+        // Emit ptrauth operand bundle for arm64e indirect calls
+        let ptrauth_bundle = self.ptrauth_operand_bundle(llfn);
+        if let Some(ptrauth_bundle) = ptrauth_bundle.as_ref().map(|b| b.as_ref()) {
+            bundles.push(ptrauth_bundle);
+        }
+
+        // Strip ConstantPtrAuth wrapper from callee for direct calls on arm64e.
+        // The callee must be a raw GlobalValue for LLVM to emit a direct call (bl).
+        let llfn = unsafe { llvm::LLVMRustUnwrapConstPtrAuth(llfn) };
 
         let invoke = unsafe {
             llvm::LLVMBuildInvokeWithOperandBundles(
@@ -1399,7 +1409,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
 
         let args = self.check_call("call", llty, llfn, args);
         let funclet_bundle = funclet.map(|funclet| funclet.bundle());
-        let mut bundles: SmallVec<[_; 2]> = SmallVec::new();
+        let mut bundles: SmallVec<[_; 3]> = SmallVec::new();
         if let Some(funclet_bundle) = funclet_bundle {
             bundles.push(funclet_bundle);
         }
@@ -1412,6 +1422,16 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         if let Some(kcfi_bundle) = kcfi_bundle.as_ref().map(|b| b.as_ref()) {
             bundles.push(kcfi_bundle);
         }
+
+        // Emit ptrauth operand bundle for arm64e indirect calls
+        let ptrauth_bundle = self.ptrauth_operand_bundle(llfn);
+        if let Some(ptrauth_bundle) = ptrauth_bundle.as_ref().map(|b| b.as_ref()) {
+            bundles.push(ptrauth_bundle);
+        }
+
+        // Strip ConstantPtrAuth wrapper from callee for direct calls on arm64e.
+        // The callee must be a raw GlobalValue for LLVM to emit a direct call (bl).
+        let llfn = unsafe { llvm::LLVMRustUnwrapConstPtrAuth(llfn) };
 
         let call = unsafe {
             llvm::LLVMBuildCallWithOperandBundles(
@@ -1842,7 +1862,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
 
         let args = self.check_call("callbr", llty, llfn, args);
         let funclet_bundle = funclet.map(|funclet| funclet.bundle());
-        let mut bundles: SmallVec<[_; 2]> = SmallVec::new();
+        let mut bundles: SmallVec<[_; 3]> = SmallVec::new();
         if let Some(funclet_bundle) = funclet_bundle {
             bundles.push(funclet_bundle);
         }
@@ -1855,6 +1875,16 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         if let Some(kcfi_bundle) = kcfi_bundle.as_ref().map(|b| b.as_ref()) {
             bundles.push(kcfi_bundle);
         }
+
+        // Emit ptrauth operand bundle for arm64e indirect calls
+        let ptrauth_bundle = self.ptrauth_operand_bundle(llfn);
+        if let Some(ptrauth_bundle) = ptrauth_bundle.as_ref().map(|b| b.as_ref()) {
+            bundles.push(ptrauth_bundle);
+        }
+
+        // Strip ConstantPtrAuth wrapper from callee for direct calls on arm64e.
+        // The callee must be a raw GlobalValue for LLVM to emit a direct call (bl).
+        let llfn = unsafe { llvm::LLVMRustUnwrapConstPtrAuth(llfn) };
 
         let callbr = unsafe {
             llvm::LLVMBuildCallBr(
@@ -1973,6 +2003,29 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
             None
         };
         kcfi_bundle
+    }
+
+    /// Emits a `"ptrauth"` operand bundle for indirect calls on arm64e targets.
+    ///
+    /// On arm64e, indirect function calls must authenticate the callee pointer.
+    /// The operand bundle instructs LLVM to emit pointer authentication
+    /// instructions (e.g. `blraaz`) instead of plain indirect calls.
+    /// Key 0 = IA (instruction address), discriminator 0 = no address diversity.
+    fn ptrauth_operand_bundle(
+        &mut self,
+        llfn: &'ll Value,
+    ) -> Option<llvm::OperandBundleBox<'ll>> {
+        if !self.cx.sess().target.llvm_target.starts_with("arm64e") {
+            return None;
+        }
+
+        let is_indirect_call = unsafe { llvm::LLVMRustIsNonGVFunctionPointerTy(llfn) };
+        if !is_indirect_call {
+            return None;
+        }
+
+        // Key 0 = IA (code pointers), discriminator 0 = default (no diversity)
+        Some(llvm::OperandBundleBox::new("ptrauth", &[self.const_u32(0), self.const_u64(0)]))
     }
 
     /// Emits a call to `llvm.instrprof.increment`. Used by coverage instrumentation.

@@ -1967,6 +1967,12 @@ unsafe extern "C" {
     pub(crate) fn LLVMRustIsNonGVFunctionPointerTy(Val: &Value) -> bool;
     pub(crate) fn LLVMRustStripPointerCasts<'a>(Val: &'a Value) -> &'a Value;
 
+    /// If Val is a `ConstantPtrAuth` wrapping a function `GlobalValue`, returns
+    /// the inner function pointer. Otherwise returns Val unchanged. This is used
+    /// to strip arm64e pointer signing from call/invoke callees so that LLVM
+    /// generates direct calls instead of indirect calls through signed pointers.
+    pub(crate) fn LLVMRustUnwrapConstPtrAuth<'a>(Val: &'a Value) -> &'a Value;
+
     // Operations on scalar constants
     pub(crate) fn LLVMRustConstIntGetZExtValue(ConstantVal: &ConstantInt, Value: &mut u64) -> bool;
     pub(crate) fn LLVMRustConstInt128Get(
@@ -2549,4 +2555,7 @@ unsafe extern "C" {
         Aliasee: &Value,
         Name: *const c_char,
     ) -> &'ll Value;
+
+    /// Wraps a constant pointer in `ConstantPtrAuth` for arm64e pointer signing.
+    pub(crate) fn LLVMRustConstPtrAuth(Ptr: &Value, Key: c_uint, Disc: u64) -> &Value;
 }

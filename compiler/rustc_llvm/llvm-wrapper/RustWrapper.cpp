@@ -1741,7 +1741,14 @@ extern "C" int32_t LLVMRustGetElementTypeArgIndex(LLVMValueRef CallSite) {
 
 extern "C" bool LLVMRustIsNonGVFunctionPointerTy(LLVMValueRef V) {
   if (unwrap<Value>(V)->getType()->isPointerTy()) {
-    if (auto *GV = dyn_cast<GlobalValue>(unwrap<Value>(V))) {
+    auto *Val = unwrap<Value>(V);
+    // Look through ConstantPtrAuth wrappers to find the underlying value.
+    // On arm64e, get_fn_addr wraps function pointers in ConstantPtrAuth for
+    // data use sites, but when used as a call callee, the inner GlobalValue
+    // still represents a direct call target.
+    if (auto *CPA = dyn_cast<ConstantPtrAuth>(Val))
+      Val = CPA->getPointer();
+    if (auto *GV = dyn_cast<GlobalValue>(Val)) {
       if (GV->getValueType()->isFunctionTy())
         return false;
     }
@@ -1752,6 +1759,24 @@ extern "C" bool LLVMRustIsNonGVFunctionPointerTy(LLVMValueRef V) {
 
 extern "C" LLVMValueRef LLVMRustStripPointerCasts(LLVMValueRef V) {
   return wrap(unwrap(V)->stripPointerCasts());
+}
+
+// If V is a ConstantPtrAuth wrapping a GlobalValue function pointer, return
+// the inner function pointer (unwrapped). This is needed because call/invoke
+// instructions must use the raw function GlobalValue as callee for LLVM to
+// generate direct calls (bl). A ConstantPtrAuth callee would cause LLVM to
+// emit an indirect call through a signed pointer, which is incorrect for
+// direct calls.
+extern "C" LLVMValueRef LLVMRustUnwrapConstPtrAuth(LLVMValueRef V) {
+  auto *Val = unwrap<Value>(V);
+  if (auto *CPA = dyn_cast<ConstantPtrAuth>(Val)) {
+    auto *Inner = CPA->getPointer();
+    if (auto *GV = dyn_cast<GlobalValue>(Inner)) {
+      if (GV->getValueType()->isFunctionTy())
+        return wrap(GV);
+    }
+  }
+  return V;
 }
 
 extern "C" bool LLVMRustLLVMHasZlibCompression() {
@@ -1781,6 +1806,27 @@ extern "C" void LLVMRustSetNoSanitizeHWAddress(LLVMValueRef Global) {
   GV.setSanitizerMetadata(MD);
 }
 
+// Wraps a constant function pointer in llvm::ConstantPtrAuth for arm64e
+// pointer signing. The resulting constant tells the linker to sign the pointer
+// at load time with the given key and discriminator.
+extern "C" LLVMValueRef LLVMRustConstPtrAuth(LLVMValueRef Ptr,
+                                             unsigned Key,
+                                             uint64_t Disc) {
+  auto *V = unwrap<Value>(Ptr);
+  auto *C = dyn_cast<Constant>(V);
+  if (!C) return Ptr;
+  auto *PTy = dyn_cast<PointerType>(C->getType());
+  if (!PTy) return Ptr;
+  if (isa<UndefValue>(C) || isa<ConstantPointerNull>(C)) return Ptr;
+
+  LLVMContext &Ctx = C->getContext();
+  auto *KeyC  = ConstantInt::get(Type::getInt32Ty(Ctx), Key);
+  auto *DiscC = ConstantInt::get(Type::getInt64Ty(Ctx), Disc);
+  // Null address discriminator means no address diversity.
+  auto *NullAD = ConstantPointerNull::get(PTy);
+
+  return wrap(ConstantPtrAuth::get(C, KeyC, DiscC, NullAD));
+}
 // Statically assert that the fixed metadata kind IDs declared in
 // `metadata_kind.rs` match the ones actually used by LLVM.
 #define FIXED_MD_KIND(VARIANT, VALUE)                                          \

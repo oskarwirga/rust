@@ -851,7 +851,15 @@ impl<'ll, 'tcx> MiscCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
     }
 
     fn get_fn_addr(&self, instance: Instance<'tcx>) -> &'ll Value {
-        get_fn(self, instance)
+        let llfn = get_fn(self, instance);
+
+        // LLVM intrinsics are not real function pointers and must not be signed.
+        let name_bytes = llvm::get_value_name(llfn);
+        if name_bytes.starts_with(b"llvm.") {
+            return llfn;
+        }
+
+        common::sign_fn_ptr_if_arm64e(self, llfn)
     }
 
     fn eh_personality(&self) -> &'ll Value {
@@ -893,7 +901,7 @@ impl<'ll, 'tcx> MiscCodegenMethods<'tcx> for CodegenCx<'ll, 'tcx> {
 
         let tcx = self.tcx;
         let llfn = match tcx.lang_items().eh_personality() {
-            Some(def_id) if name.is_none() => self.get_fn_addr(ty::Instance::expect_resolve(
+            Some(def_id) if name.is_none() => self.get_fn(ty::Instance::expect_resolve(
                 tcx,
                 self.typing_env(),
                 def_id,

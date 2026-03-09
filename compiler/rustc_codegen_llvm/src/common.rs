@@ -22,6 +22,24 @@ pub(crate) use crate::context::CodegenCx;
 use crate::context::{GenericCx, SCx};
 use crate::llvm::{self, BasicBlock, ConstantInt, FALSE, Metadata, TRUE, ToLlvmBool, Type, Value};
 
+/// On arm64e targets, wraps a function pointer constant in `ConstantPtrAuth`
+/// so that the linker/loader will sign it at load time. This is required
+/// because arm64e uses pointer authentication codes (PAC) on all code
+/// pointers. Uses key IA (instruction address, key 0) with no address
+/// diversity (discriminator 0).
+pub(crate) fn sign_fn_ptr_if_arm64e<'ll>(
+    cx: &CodegenCx<'ll, '_>,
+    llfn: &'ll llvm::Value,
+) -> &'ll llvm::Value {
+    if !cx.sess().target.llvm_target.starts_with("arm64e") {
+        return llfn;
+    }
+
+    // SAFETY: LLVMRustConstPtrAuth returns a valid Value reference for valid inputs,
+    // and falls through to returning the input unchanged for non-constant/null/undef values.
+    unsafe { llvm::LLVMRustConstPtrAuth(llfn, 0, 0) }
+}
+
 /*
 * A note on nomenclature of linking: "extern", "foreign", and "upcall".
 *

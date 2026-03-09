@@ -454,6 +454,15 @@ pub(crate) fn llfn_attrs_from_instance<'ll, 'tcx>(
                 ));
             }
         }
+
+        // On arm64e targets, all functions must use pointer authentication for
+        // calls, returns, and trap on authentication failure. These attributes
+        // tell the LLVM backend to emit PAC instructions (e.g. PACIBSP/RETAB).
+        if sess.target.llvm_target.starts_with("arm64e") {
+            to_add.push(llvm::CreateAttrString(cx.llcx, "ptrauth-returns"));
+            to_add.push(llvm::CreateAttrString(cx.llcx, "ptrauth-calls"));
+            to_add.push(llvm::CreateAttrString(cx.llcx, "ptrauth-auth-traps"));
+        }
     }
     if codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::ALLOCATOR)
         || codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::ALLOCATOR_ZEROED)
