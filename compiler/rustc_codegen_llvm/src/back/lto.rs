@@ -68,6 +68,20 @@ fn prepare_lto(
         symbols_below_threshold.extend(msan_weak_symbols.into_iter().map(|sym| sym.to_owned()));
     }
 
+    if cgcx.module_config.sanitizer.contains(SanitizerSet::DATAFLOW) {
+        // DFSan renames instrumented functions by appending a `.dfsan` suffix.
+        // Preserve these renamed symbols so ThinLTO doesn't strip them.
+        let dfsan_symbols: Vec<CString> = symbols_below_threshold
+            .iter()
+            .filter_map(|sym| {
+                sym.to_str()
+                    .ok()
+                    .and_then(|s| CString::new(format!("{s}.dfsan")).ok())
+            })
+            .collect();
+        symbols_below_threshold.extend(dfsan_symbols);
+    }
+
     // Preserve LLVM-injected, ASAN-related symbols.
     // See also https://github.com/rust-lang/rust/issues/113404.
     symbols_below_threshold.push(c"___asan_globals_registered".to_owned());

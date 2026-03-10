@@ -6,6 +6,7 @@ use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
 use rustc_middle::middle::exported_symbols::{ExportedSymbol, SymbolExportInfo, SymbolExportLevel};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{CrateType, Lto};
+use rustc_target::spec::SanitizerSet;
 use tracing::info;
 
 use crate::back::symbol_export::{self, allocator_shim_symbols, symbol_name_for_instance_in_crate};
@@ -80,7 +81,19 @@ pub(super) fn exported_symbols_for_lto(
 ) -> Vec<String> {
     let export_threshold = match tcx.sess.lto() {
         // We're just doing LTO for our one crate
-        Lto::ThinLocal => SymbolExportLevel::Rust,
+        Lto::ThinLocal => {
+            // DFSan renames instrumented functions with a `.dfsan` suffix and
+            // creates wrapper functions with the original name. Both the renamed
+            // function and the wrapper have C-level export visibility. If we use
+            // the default `Rust` threshold, these symbols get internalized and
+            // removed by ThinLTO, breaking DFSan-instrumented callers that
+            // expect to find `foo.dfsan` at link time.
+            if tcx.sess.sanitizers().contains(SanitizerSet::DATAFLOW) {
+                SymbolExportLevel::C
+            } else {
+                SymbolExportLevel::Rust
+            }
+        }
 
         // We're doing LTO for the entire crate graph
         Lto::Fat | Lto::Thin => symbol_export::crates_export_threshold(&tcx.crate_types()),
